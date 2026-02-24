@@ -157,7 +157,7 @@ CUDA_VISIBLE_DEVICES=0 python -u inference_hybird.py --zeroshot --dataset='infer
 
 ## 👍 Score Calculation
 
-1. If you want to skip the above inference process, we also provide intermedia outputs for evaluation.
+1. If you want to skip the above inference process, we also provide intermediate outputs for evaluation.
 ```bash
 [1] prepare results
 AffectGPT
@@ -165,7 +165,7 @@ AffectGPT
 │   ├── chinese-hubert-large # audio encoders
 │   ├── clip-vit-large-patch14 # video encoders
 │   ├── Qwen2.5-7B-Instruct # LLM
-├── output # Available at: https://pan.baidu.com/s/1pIoMM3RT7BqeyGI0t5KdoQ?pwd=c7x2
+├── output # Available at Github folder
 │   ├── emercoarse_highlevelfilter4_outputhybird_bestsetup_bestfusion_lz # Training on mercaptionplus + input face
 │   ├── **results-cmumosei** # Intermedia Outputs
 │   ├── **results-cmumosi** # Intermedia Outputs
