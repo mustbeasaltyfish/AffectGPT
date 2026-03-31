@@ -46,6 +46,7 @@ class BaseTask:
         model_cfg = cfg.model_cfg
         assert len(datasets_cfg) > 0, "At least one dataset has to be specified."
 
+        #为全部 dataset 构建实例
         for name in datasets_cfg:
             dataset_cfg = datasets_cfg[name]
             ############################ dataset_config Post-processing ############################

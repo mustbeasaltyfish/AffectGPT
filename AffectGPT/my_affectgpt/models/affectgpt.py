@@ -9,7 +9,7 @@ from my_affectgpt.models.blip2 import Blip2Base, disabled_train
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 from my_affectgpt.models.Qformer import BertConfig, BertLMHeadModel
 from my_affectgpt.models.tokenizer import load_tokenizer_from_LLM
-from my_affectgpt.models.encoder import * # 只有调用了，才能实现 registry 过程
+from my_affectgpt.models.encoder import * # 只有调用了，才能实现 registry 过程 
 import config
 
 
@@ -681,7 +681,7 @@ class AffectGPT(Blip2Base):
         temp_input_ids[temp_input_ids == self.MULTI_PATCH_TOKEN_ID] = 0
         temp_input_ids[temp_input_ids == self.IMAGE_PATCH_TOKEN_ID] = 0
         temp_input_embedding = self.llama_model.model.model.embed_tokens(temp_input_ids) # 嵌套 LoRA 之后，会在 model 外面再包一层
-
+        # 来自  self.llama_model = get_peft_model(self.llama_model, peft_config)
         ## replace <ImageHere>; <MultiHere>; <FrameHere>; <FaceHere>; <AudioHere>
         cur_idx = 0
         new_input_embeds = []
