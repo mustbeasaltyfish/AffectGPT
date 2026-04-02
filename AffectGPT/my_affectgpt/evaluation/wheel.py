@@ -556,6 +556,32 @@ def compute_single_ew_scores(gt_text_or_list, pred_text_or_list, level="level1",
     }
 
 
+def compute_single_ew_jaccard_scores(labels_a, labels_b, level="level1", format_mapping=None, raw_mapping=None):
+    if format_mapping is None:
+        format_mapping = DEFAULT_FORMAT_MAPPING
+    if raw_mapping is None:
+        raw_mapping = DEFAULT_RAW_MAPPING
+
+    normalized_a = _normalize_openset_labels(labels_a)
+    normalized_b = _normalize_openset_labels(labels_b)
+
+    if len(normalized_a) == 0 or len(normalized_b) == 0:
+        return {"similarity": 0.0}
+
+    similarities = []
+    for metric in _get_candidate_metrics(level):
+        mapped_a = _map_labels_for_metric(normalized_a, metric, format_mapping, raw_mapping)
+        mapped_b = _map_labels_for_metric(normalized_b, metric, format_mapping, raw_mapping)
+        union = mapped_a | mapped_b
+        if len(union) == 0:
+            similarities.append(0.0)
+            continue
+        intersection = mapped_a & mapped_b
+        similarities.append(len(intersection) / len(union))
+
+    return {"similarity": float(np.mean(similarities))}
+
+
 # 功能：input [gt, openset]; output: 12 个 EW-based metric 下的平均结果
 def wheel_metric_calculation(gt_root=None, gt_csv=None, name2gt=None, 
                              openset_root=None, openset_npz=None, name2pred=None, 

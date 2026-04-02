@@ -63,6 +63,7 @@ class OpenSetLengthPenalty(BasePenalty):
             return gt_length / pred_length
         if gt_length <= 1:
             # Keep P3's logarithmic shape while avoiding the degenerate log(1)=0 case.
+            # 这里和原文不同，目的是防止当gt_length为1时，惩罚值为0
             return math.log(gt_length + 1.0) / math.log(pred_length + 1.0)
         return math.log(gt_length) / math.log(pred_length)
 

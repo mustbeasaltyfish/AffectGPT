@@ -1,11 +1,16 @@
-import logging
-
 import torch
 
 from my_affectgpt.common.registry import registry
 from my_affectgpt.evaluation.ew_metric import extract_openset_texts_batch, func_read_batch_calling_model
 from my_affectgpt.evaluation.wheel import compute_single_ew_scores
 from my_affectgpt.rewards.base_reward import BaseReward
+from my_affectgpt.rewards.text_extract_utils import (
+    extract_tagged_block,
+    log_extractor_warning,
+    reshape_like_groups,
+    should_reraise_extractor_error,
+    unique_length,
+)
 from toolkit.utils.functions import string_to_list
 
 
@@ -42,30 +47,15 @@ class AccuracyReward(BaseReward):
             )
 
     def _extract_answer_text(self, response):
-        if not isinstance(response, str):
-            return None
-
-        start = response.find(self.answer_open_tag)
-        if start < 0:
-            return None if self.strict_answer_tag else response.strip()
-
-        content_start = start + len(self.answer_open_tag)
-        end = response.find(self.answer_close_tag, content_start)
-        if end < 0:
-            return None if self.strict_answer_tag else response[content_start:].strip()
-
-        answer_text = response[content_start:end].strip()
-        return answer_text if answer_text else None
+        return extract_tagged_block(
+            response,
+            self.answer_open_tag,
+            self.answer_close_tag,
+            strict=self.strict_answer_tag,
+        )
 
     def _reshape_like_groups(self, flat_items, group_sizes):
-        if len(set(group_sizes)) > 1:
-            raise ValueError(f"AccuracyReward requires uniform group sizes, got {group_sizes}.")
-        outputs = []
-        cursor = 0
-        for group_size in group_sizes:
-            outputs.append(flat_items[cursor: cursor + group_size])
-            cursor += group_size
-        return outputs
+        return reshape_like_groups(flat_items, group_sizes, caller_name="AccuracyReward")
 
     def _extract_gt_labels(self, reward_meta):
         gt_labels = reward_meta.get("gt_openset_list")
@@ -76,29 +66,8 @@ class AccuracyReward(BaseReward):
             raise ValueError("Ground-truth openset labels are empty in reward_meta.")
         return gt_labels
 
-    def _should_reraise_extractor_error(self, error):
-        if isinstance(error, (MemoryError, OSError)):
-            return True
-        if isinstance(error, RuntimeError):
-            message = str(error).lower()
-            critical_patterns = [
-                "out of memory",
-                "cuda",
-                "cublas",
-                "cudnn",
-                "model weights",
-                "failed to initialize",
-            ]
-            return any(pattern in message for pattern in critical_patterns)
-        return False
-
     def _unique_length(self, labels):
-        values = []
-        for label in labels:
-            label = str(label).strip().lower()
-            if label:
-                values.append(label)
-        return len(list(dict.fromkeys(values)))
+        return unique_length(labels)
 
     def score(self, samples, responses, reward_metas):
         group_sizes = [len(group) for group in responses]
@@ -119,14 +88,9 @@ class AccuracyReward(BaseReward):
                     batch_size=self.extractor_batch_size,
                 )
             except Exception as error:
-                if self._should_reraise_extractor_error(error):
+                if should_reraise_extractor_error(error):
                     raise
-                logging.warning(
-                    "AccuracyReward extractor failed for %d answers with %s: %s",
-                    len(valid_answer_texts),
-                    type(error).__name__,
-                    error,
-                )
+                log_extractor_warning("AccuracyReward", len(valid_answer_texts), error)
                 if not self.zero_on_extract_failure:
                     raise
                 extracted_openset_texts = [""] * len(valid_answer_texts)
