@@ -69,12 +69,14 @@ def get_completion_qwen_bacth(llm, sampling_params, tokenizer, prompt_list):
     message_batch = []
     for prompt in prompt_list:
         message_batch.append([{"role": "user", "content": prompt}])
-
+    
+    # 这里不做tokenize（VLLM自带），只是简单地拼接 prompt
     text_batch = tokenizer.apply_chat_template(
         message_batch,
         tokenize=False,
         add_generation_prompt=True,
     )
+    
 
     outputs = llm.generate(text_batch, sampling_params)
     

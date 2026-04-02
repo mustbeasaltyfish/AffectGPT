@@ -469,36 +469,97 @@ def calculate_openset_overlap_rate(gt_root=None, gt_csv=None, name2gt=None,
 
 format_mapping = read_format2raws()          # level3 -> level2
 raw_mapping = read_candidate_synonym_merge() # level2 -> level1
+
+
+def _get_candidate_metrics(level="level1"):
+    if level == 'level1':
+        return [
+            'case3_wheel1_level1',
+            'case3_wheel2_level1',
+            'case3_wheel3_level1',
+            'case3_wheel4_level1',
+            'case3_wheel5_level1',
+        ]
+    if level == 'level2':
+        return [
+            'case3_wheel1_level2',
+            'case3_wheel2_level2',
+            'case3_wheel3_level2',
+            'case3_wheel4_level2',
+            'case3_wheel5_level2',
+        ]
+    raise ValueError(f"Unsupported level: {level}")
+
+
+def _normalize_openset_labels(labels):
+    labels = string_to_list(labels)
+    return [item.lower().strip() for item in labels if item is not None and str(item).strip() != ""]
+
+
+def _map_labels_for_metric(labels, metric, format_mapping=None, raw_mapping=None):
+    if format_mapping is None:
+        format_mapping = globals()["format_mapping"]
+    if raw_mapping is None:
+        raw_mapping = globals()["raw_mapping"]
+    if metric.startswith('case3'):
+        _, wheelname, levelname = metric.split('_')
+        wheel_map = func_get_wheel_cluster(wheelname, levelname)
+    else:
+        wheel_map = None
+    return set(func_map_label_to_synonym(labels, format_mapping, raw_mapping, wheel_map, metric))
+
+
+def compute_single_ew_scores(gt_text_or_list, pred_text_or_list, level="level1", format_mapping=None, raw_mapping=None):
+    if format_mapping is None:
+        format_mapping = globals()["format_mapping"]
+    if raw_mapping is None:
+        raw_mapping = globals()["raw_mapping"]
+
+    gt_labels = _normalize_openset_labels(gt_text_or_list)
+    pred_labels = _normalize_openset_labels(pred_text_or_list)
+
+    if len(gt_labels) == 0:
+        raise ValueError("Ground-truth openset labels are empty.")
+
+    if len(pred_labels) == 0:
+        return {"f1": 0.0, "precision": 0.0, "recall": 0.0}
+
+    whole_scores = []
+    for metric in _get_candidate_metrics(level):
+        mapped_gt = _map_labels_for_metric(gt_labels, metric, format_mapping, raw_mapping)
+        mapped_pred = _map_labels_for_metric(pred_labels, metric, format_mapping, raw_mapping)
+
+        if len(mapped_gt) == 0:
+            raise ValueError(f"Ground-truth openset labels become empty after mapping for metric {metric}.")
+
+        if len(mapped_pred) == 0:
+            precision = 0.0
+            recall = 0.0
+        else:
+            overlap = len(mapped_gt & mapped_pred)
+            precision = overlap / len(mapped_pred)
+            recall = overlap / len(mapped_gt)
+
+        if precision + recall == 0:
+            fscore = 0.0
+        else:
+            fscore = 2 * (precision * recall) / (precision + recall)
+        whole_scores.append([fscore, precision, recall])
+
+    avg_scores = np.mean(whole_scores, axis=0).tolist()
+    return {
+        "f1": float(avg_scores[0]),
+        "precision": float(avg_scores[1]),
+        "recall": float(avg_scores[2]),
+    }
+
+
 # 功能：input [gt, openset]; output: 12 个 EW-based metric 下的平均结果
 def wheel_metric_calculation(gt_root=None, gt_csv=None, name2gt=None, 
                              openset_root=None, openset_npz=None, name2pred=None, 
                              process_names=None, inter_print=True, level='level1'):
 
-    # 已 M-avg 为主指标
-    # candidate_metrics = [
-    #                     'case1', 'case2',
-    #                     'case3_wheel1_level1', 'case3_wheel1_level2',
-    #                     'case3_wheel2_level1', 'case3_wheel2_level2',
-    #                     'case3_wheel3_level1', 'case3_wheel3_level2',
-    #                     'case3_wheel4_level1', 'case3_wheel4_level2',
-    #                     'case3_wheel5_level1', 'case3_wheel5_level2',
-    #                     ]
-    if level == 'level1':
-        candidate_metrics = [
-                            'case3_wheel1_level1',
-                            'case3_wheel2_level1',
-                            'case3_wheel3_level1',
-                            'case3_wheel4_level1',
-                            'case3_wheel5_level1',
-                            ]
-    elif level == 'level2':
-        candidate_metrics = [
-                            'case3_wheel1_level2',
-                            'case3_wheel2_level2',
-                            'case3_wheel3_level2',
-                            'case3_wheel4_level2',
-                            'case3_wheel5_level2',
-                            ]
+    candidate_metrics = _get_candidate_metrics(level)
 
     # 计算每个metric的这个值
     whole_scores = []

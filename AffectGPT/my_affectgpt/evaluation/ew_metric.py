@@ -27,12 +27,45 @@ def func_read_batch_calling_model(modelname):
     sampling_params = SamplingParams(temperature=0.7, top_p=0.8, repetition_penalty=1.05, max_tokens=512)
     return llm, tokenizer, sampling_params
 
+
+def extract_openset_texts_batch(
+    texts,
+    modelname=None,
+    llm=None,
+    tokenizer=None,
+    sampling_params=None,
+    batch_size=8,
+):
+    if texts is None:
+        return []
+
+    texts = list(texts)
+    if len(texts) == 0:
+        return []
+
+    if (llm is None) and (tokenizer is None) and (sampling_params is None):
+        if modelname is None:
+            raise ValueError("modelname is required when llm/tokenizer/sampling_params are not provided.")
+        llm, tokenizer, sampling_params = func_read_batch_calling_model(modelname)
+
+    whole_responses = []
+    batches_texts = split_list_into_batch(texts, batchsize=batch_size)
+    for batch_texts in batches_texts:
+        batch_responses = reason_to_openset_qwen(
+            llm=llm,
+            tokenizer=tokenizer,
+            sampling_params=sampling_params,
+            batch_reasons=batch_texts,
+        )
+        whole_responses.extend(batch_responses)
+    return whole_responses
+
 ## reason -> ov labels
 def extract_openset_batchcalling(reason_root=None, reason_npz=None, update_npz=None, reason_csv=None, name2reason=None,
                                  store_root=None, store_npz=None, 
                                  modelname=None, llm=None, tokenizer=None, sampling_params=None):
     
-    ## load model
+    ## load model，优先复用已加载的模型，避免重复加载
     if (llm is None) and (tokenizer is None) and (sampling_params is None):
         model_path = config.PATH_TO_LLM[modelname]
         llm = LLM(model=model_path)
@@ -58,6 +91,11 @@ def extract_openset_batchcalling(reason_root=None, reason_npz=None, update_npz=N
             name2reason[name] = item
 
     ## main process
+    # name2reason format example:
+    # {
+    #   "000001": "The speaker smiles and sounds excited; likely happy, excited.",
+    #   "000002": "Low tone and negative wording suggest sadness and disappointment."
+    # }
     whole_names, whole_responses = list(name2reason.keys()), []
     batches_names = split_list_into_batch(whole_names, batchsize=8)
     for batch_names in batches_names:

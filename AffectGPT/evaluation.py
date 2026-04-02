@@ -205,10 +205,10 @@ def main_zeroshot_scores(input_dir, debug=False, test_epochs='', inter_print=Tru
 
     # read dataset infos
     dataset = func_read_datasetname(input_dir)
-    disordim_flag = get_discrete_or_dimension_flag(dataset)
+    disordim_flag = get_discrete_or_dimension_flag(dataset) # discrete: 自然语言形式标签；dimension: float score
     if inter_print: print (f'process dataset: {dataset} => {disordim_flag}')
     dataset_cls = get_dataset2cls(dataset)
-    name2gt = dataset_cls.get_test_name2gt()
+    name2gt = dataset_cls.get_test_name2gt() # 自然语言形式标签
     if inter_print: print (f'target sample number: {len(name2gt)}')
 
     # discrete: 自然语言形式标签；dimension: float score
