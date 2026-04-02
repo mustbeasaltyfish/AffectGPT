@@ -2,6 +2,7 @@ import copy
 import einops
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.cuda.amp import autocast as autocast
 from transformers import BertConfig
 from my_affectgpt.common.registry import registry
@@ -51,6 +52,7 @@ class AffectGPT(Blip2Base):
         num_audio_query_token,
         num_multi_query_token,
         num_image_query_token,
+        max_length,
         frozen_multi_Qformer,
         frozen_multi_llama_proj,
         multi_fusion_type,
@@ -71,6 +73,7 @@ class AffectGPT(Blip2Base):
             <AudioHere>: 32001
         '''
         self.llama_model_name = llama_model_name    
+        self.max_txt_len = max_length
         self.llama_tokenizer = load_tokenizer_from_LLM(llama_model_name)
         DEFAULT_IMAGE_PATCH_TOKEN = config.DEFAULT_IMAGE_PATCH_TOKEN
         DEFAULT_AUDIO_PATCH_TOKEN = config.DEFAULT_AUDIO_PATCH_TOKEN
@@ -319,7 +322,7 @@ class AffectGPT(Blip2Base):
             inputs_llama = self.image_llama_proj(image_hidden) # [b, t=32, llmdim]
 
         return image_hidden, inputs_llama
-    
+
     # 将所有 image 压缩到 1 tokens
     def encode_image_mean(self, image, raw_image):
         device = image.device
@@ -403,7 +406,7 @@ class AffectGPT(Blip2Base):
             inputs_llama = self.affectgpt_proj(video_hidden)
 
         return store_hidden_state, inputs_llama
-    
+
     # 将视频的时间维度压缩到 1 tokens
     def encode_video_mean(self, video, raw_video):
         device = video.device
@@ -646,6 +649,236 @@ class AffectGPT(Blip2Base):
             multi_hiddens, multi_llms = self.encode_multi_attention(video_hidden_state, audio_hidden_state)
         return multi_hiddens, multi_llms
 
+    def _get_embed_tokens(self):
+        return self.llama_model.model.model.embed_tokens
+
+    def encode_modalities(self, samples):
+        self.face_or_frame = samples["face_or_frame"]
+        modal_hidden_dict = {
+            "frame": None,
+            "face": None,
+            "audio": None,
+            "image": None,
+            "multi": None,
+        }
+        modal_llm_dict = {
+            "frame": None,
+            "face": None,
+            "audio": None,
+            "image": None,
+            "multi": None,
+        }
+
+        if "frames" in samples:
+            modal_hidden_dict["frame"], modal_llm_dict["frame"] = self.encode_video_merge(
+                samples["frames"], samples["raw_frames"]
+            )
+        if "faces" in samples:
+            modal_hidden_dict["face"], modal_llm_dict["face"] = self.encode_video_merge(
+                samples["faces"], samples["raw_faces"]
+            )
+        if "audios" in samples:
+            modal_hidden_dict["audio"], modal_llm_dict["audio"] = self.encode_audio_merge(
+                samples["audios"], samples["raw_audios"]
+            )
+        if "images" in samples:
+            modal_hidden_dict["image"], modal_llm_dict["image"] = self.encode_image_merge(
+                samples["images"], samples["raw_images"]
+            )
+
+        need_multi = self.face_or_frame.startswith("multiface") or self.face_or_frame.startswith("multiframe")
+
+        if need_multi:
+            if self.face_or_frame.startswith("multiface"):
+                modal_hidden_dict["multi"], modal_llm_dict["multi"] = self.encode_multi_merge(
+                    modal_hidden_dict["face"], modal_hidden_dict["audio"]
+                )
+            elif self.face_or_frame.startswith("multiframe"):
+                modal_hidden_dict["multi"], modal_llm_dict["multi"] = self.encode_multi_merge(
+                    modal_hidden_dict["frame"], modal_hidden_dict["audio"]
+                )
+
+        return modal_hidden_dict, modal_llm_dict
+
+    def build_prompt_input_ids(self, prompt_texts, max_length):
+        bos_token_id = self.llama_tokenizer.bos_token_id
+        pad_token_id = self.llama_tokenizer.pad_token_id
+        input_ids = []
+        for prompt_text in prompt_texts:
+            prompt_ids = self.llama_tokenizer(
+                prompt_text,
+                return_tensors="pt",
+                padding="longest",
+                max_length=max_length,
+                truncation=True,
+                add_special_tokens=False,
+            ).input_ids[0]
+            prompt_ids = torch.cat(
+                [torch.tensor([bos_token_id], dtype=prompt_ids.dtype), prompt_ids],
+                dim=0,
+            )
+            input_ids.append(prompt_ids)
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids,
+            batch_first=True,
+            padding_value=pad_token_id,
+        )
+        return input_ids
+
+    def build_inputs_embeds_from_prompt_ids(self, input_ids, modal_llm_dict):
+        temp_input_ids = copy.deepcopy(input_ids)
+        temp_input_ids[temp_input_ids == self.FRAME_PATCH_TOKEN_ID] = 0
+        temp_input_ids[temp_input_ids == self.FACE_PATCH_TOKEN_ID] = 0
+        temp_input_ids[temp_input_ids == self.AUDIO_PATCH_TOKEN_ID] = 0
+        temp_input_ids[temp_input_ids == self.MULTI_PATCH_TOKEN_ID] = 0
+        temp_input_ids[temp_input_ids == self.IMAGE_PATCH_TOKEN_ID] = 0
+        temp_input_embedding = self._get_embed_tokens()(temp_input_ids)
+
+        patch_specs = [
+            (self.FRAME_PATCH_TOKEN_ID, self.num_video_query_token, modal_llm_dict["frame"]),
+            (self.FACE_PATCH_TOKEN_ID, self.num_video_query_token, modal_llm_dict["face"]),
+            (self.AUDIO_PATCH_TOKEN_ID, self.num_audio_query_token, modal_llm_dict["audio"]),
+            (self.MULTI_PATCH_TOKEN_ID, self.num_multi_query_token, modal_llm_dict["multi"]),
+            (self.IMAGE_PATCH_TOKEN_ID, self.num_image_query_token, modal_llm_dict["image"]),
+        ]
+
+        new_input_embeds = []
+        for cur_idx, (cur_input_ids, cur_input_embeds) in enumerate(zip(input_ids, temp_input_embedding)):
+            for patch_token_id, query_token_number, embeds in patch_specs:
+                if (cur_input_ids == patch_token_id).sum() == 0:
+                    continue
+                assert embeds is not None, "Some input info is missing."
+                cur_features = embeds[cur_idx]
+                if (cur_input_ids == patch_token_id).sum() != query_token_number:
+                    raise ValueError("Patch token number does not match query token number.")
+                masked_indices = torch.where(cur_input_ids == patch_token_id)[0]
+                mask_index_start = masked_indices[0]
+                if (
+                    masked_indices
+                    != torch.arange(
+                        mask_index_start,
+                        mask_index_start + query_token_number,
+                        device=masked_indices.device,
+                        dtype=masked_indices.dtype,
+                    )
+                ).any():
+                    raise ValueError("Patch tokens should be consecutive.")
+                cur_input_embeds = torch.cat(
+                    (
+                        cur_input_embeds[:mask_index_start],
+                        cur_features,
+                        cur_input_embeds[mask_index_start + query_token_number :],
+                    ),
+                    dim=0,
+                )
+            new_input_embeds.append(cur_input_embeds)
+
+        return torch.stack(new_input_embeds, dim=0)
+
+    def _decode_response_tokens(self, response_token_ids):
+        response = self.llama_tokenizer.decode(response_token_ids, add_special_tokens=False)
+        if response.find(self.llama_tokenizer.bos_token) != -1:
+            response = response.split(self.llama_tokenizer.bos_token)[-1]
+        if response.find(self.llama_tokenizer.eos_token) != -1:
+            response = response.split(self.llama_tokenizer.eos_token)[0]
+        response = response.rsplit("###", 1)[0]
+        response = response.split("Assistant:")[-1].strip()
+        return response
+
+    @torch.no_grad()
+    def generate_group(self, samples, generation_cfg, group_size):
+        prompt_input_ids = self.build_prompt_input_ids(samples["prompt_texts"], self.max_txt_len)
+        prompt_input_ids = prompt_input_ids.to(self.device)
+        prompt_attention_mask = prompt_input_ids.ne(self.llama_tokenizer.pad_token_id)
+
+        _, modal_llm_dict = self.encode_modalities(samples)
+        prompt_inputs_embeds = self.build_inputs_embeds_from_prompt_ids(prompt_input_ids, modal_llm_dict)
+
+        repeated_input_ids = torch.repeat_interleave(prompt_input_ids, repeats=group_size, dim=0)
+        repeated_attention_mask = torch.repeat_interleave(prompt_attention_mask, repeats=group_size, dim=0)
+        repeated_inputs_embeds = torch.repeat_interleave(prompt_inputs_embeds, repeats=group_size, dim=0)
+
+        outputs = self.llama_model.generate(
+            inputs_embeds=repeated_inputs_embeds,
+            attention_mask=repeated_attention_mask,
+            max_new_tokens=int(generation_cfg.get("max_new_tokens", 256)),
+            do_sample=True,
+            top_p=float(generation_cfg.get("top_p", 0.9)),
+            temperature=float(generation_cfg.get("temperature", 0.8)),
+            num_return_sequences=1,
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
+
+        sequences = outputs.sequences
+        generated_len = len(outputs.scores)
+        if generated_len == 0:
+            response_token_ids = sequences.new_zeros((sequences.size(0), 0))
+        else:
+            response_token_ids = sequences[:, -generated_len:]
+
+        flat_responses = [
+            self._decode_response_tokens(cur_response_ids)
+            for cur_response_ids in response_token_ids
+        ]
+        grouped_responses = []
+        for start in range(0, len(flat_responses), group_size):
+            grouped_responses.append(flat_responses[start : start + group_size])
+
+        response_token_ids = response_token_ids.view(len(samples["prompt_texts"]), group_size, -1)
+        return {
+            "prompt_input_ids": prompt_input_ids,
+            "response_token_ids": response_token_ids,
+            "responses": grouped_responses,
+        }
+
+    def compute_response_logprobs(self, samples, prompt_input_ids, response_token_ids):
+        batch_size, group_size, response_len = response_token_ids.size()
+        prompt_input_ids = prompt_input_ids.to(self.device)
+        response_token_ids = response_token_ids.to(self.device)
+
+        prompt_attention_mask = prompt_input_ids.ne(self.llama_tokenizer.pad_token_id)
+        _, modal_llm_dict = self.encode_modalities(samples)
+        prompt_inputs_embeds = self.build_inputs_embeds_from_prompt_ids(prompt_input_ids, modal_llm_dict)
+
+        prompt_input_ids = torch.repeat_interleave(prompt_input_ids, repeats=group_size, dim=0)
+        prompt_attention_mask = torch.repeat_interleave(prompt_attention_mask, repeats=group_size, dim=0)
+        prompt_inputs_embeds = torch.repeat_interleave(prompt_inputs_embeds, repeats=group_size, dim=0)
+
+        flat_response_ids = response_token_ids.view(batch_size * group_size, response_len)
+        response_mask = flat_response_ids.ne(self.llama_tokenizer.pad_token_id)
+        response_embeds = self._get_embed_tokens()(flat_response_ids)
+
+        full_input_ids = torch.cat([prompt_input_ids, flat_response_ids], dim=1)
+        full_attention_mask = torch.cat([prompt_attention_mask, response_mask], dim=1)
+        full_inputs_embeds = torch.cat([prompt_inputs_embeds, response_embeds], dim=1)
+
+        with self.maybe_autocast():
+            outputs = self.llama_model(
+                inputs_embeds=full_inputs_embeds,
+                attention_mask=full_attention_mask,
+                return_dict=True,
+            )
+
+        logits = outputs.logits
+        shift_logits = logits[:, :-1, :]
+        shift_labels = full_input_ids[:, 1:]
+        token_logprobs = F.log_softmax(shift_logits, dim=-1).gather(
+            dim=-1, index=shift_labels.unsqueeze(-1)
+        ).squeeze(-1)
+
+        response_start = prompt_input_ids.size(1) - 1
+        response_logprobs = token_logprobs[:, response_start : response_start + response_len]
+        response_logprobs = response_logprobs.view(batch_size, group_size, response_len)
+        response_mask = response_mask.view(batch_size, group_size, response_len)
+        seq_logprobs = (response_logprobs * response_mask).sum(dim=-1) / response_mask.sum(dim=-1).clamp_min(1)
+
+        return {
+            "token_logprobs": response_logprobs,
+            "response_mask": response_mask,
+            "seq_logprobs": seq_logprobs,
+        }
+
     '''
     inference prompt:
     <s>###Human: Close your eyes, open your ears and you imagine only based on the sound that <Audio><AudioHere></Audio>. \
@@ -654,60 +887,9 @@ class AffectGPT(Blip2Base):
     Now answer my question based on what you have seen, heard, and subtitles. {user_message} ###Assistant:
     '''
     def forward(self, samples):
-
-        self.face_or_frame = samples['face_or_frame'] # 把这个参数传出来
-        frame_llms, face_llms, audio_llms, image_llms, multi_llms = None, None, None, None, None
-        if 'frames' in samples: 
-            frame_hiddens, frame_llms = self.encode_video_merge(samples['frames'],  samples['raw_frames']) # frame: [b c t h w] -> [b, 32, 4096]
-        if 'faces'  in samples: 
-            # print (samples['faces'].shape)
-            face_hiddens,  face_llms  = self.encode_video_merge(samples['faces'],  samples['raw_faces']) # face:  [b c t h w] -> [b, 32, 4096]
-        if 'audios' in samples: 
-            audio_hiddens, audio_llms = self.encode_audio_merge(samples['audios'],  samples['raw_audios'])
-        if 'images' in samples: 
-            image_hiddens, image_llms = self.encode_image_merge(samples['images'],  samples['raw_images'])
-        if (samples['input_ids'][0] == self.MULTI_PATCH_TOKEN_ID).sum() != 0: # 这是时候才需要 multi
-            if self.face_or_frame.startswith('multiface'):
-                multi_hiddens, multi_llms = self.encode_multi_merge(face_hiddens, audio_hiddens)
-            if self.face_or_frame.startswith('multiframe'):
-                multi_hiddens, multi_llms = self.encode_multi_merge(frame_hiddens, audio_hiddens)
-
-        # temp_input_ids: <ImageHere> -> [0]   
         input_ids = samples['input_ids']
-        temp_input_ids = copy.deepcopy(input_ids)
-        temp_input_ids[temp_input_ids == self.FRAME_PATCH_TOKEN_ID] = 0
-        temp_input_ids[temp_input_ids == self.FACE_PATCH_TOKEN_ID]  = 0
-        temp_input_ids[temp_input_ids == self.AUDIO_PATCH_TOKEN_ID] = 0
-        temp_input_ids[temp_input_ids == self.MULTI_PATCH_TOKEN_ID] = 0
-        temp_input_ids[temp_input_ids == self.IMAGE_PATCH_TOKEN_ID] = 0
-        temp_input_embedding = self.llama_model.model.model.embed_tokens(temp_input_ids) # 嵌套 LoRA 之后，会在 model 外面再包一层
-        # 来自  self.llama_model = get_peft_model(self.llama_model, peft_config)
-        ## replace <ImageHere>; <MultiHere>; <FrameHere>; <FaceHere>; <AudioHere>
-        cur_idx = 0
-        new_input_embeds = []
-        for cur_input_ids, cur_input_embeds in zip(input_ids, temp_input_embedding):
-            for (patch_token_id, query_token_number, embeds) in [(self.FRAME_PATCH_TOKEN_ID, self.num_video_query_token, frame_llms),
-                                                                (self.FACE_PATCH_TOKEN_ID,  self.num_video_query_token, face_llms),
-                                                                (self.AUDIO_PATCH_TOKEN_ID, self.num_audio_query_token, audio_llms),
-                                                                (self.MULTI_PATCH_TOKEN_ID, self.num_multi_query_token, multi_llms),
-                                                                (self.IMAGE_PATCH_TOKEN_ID, self.num_image_query_token, image_llms),
-                                                                ]:
-                if (cur_input_ids == patch_token_id).sum() != 0:
-                    assert embeds is not None, f'Some input info is missing.'
-                    cur_features = embeds[cur_idx]
-                    if (cur_input_ids == patch_token_id).sum() != query_token_number:
-                        raise ValueError("The number of audio patch tokens should be the same as the number of audio patches.")
-                    masked_indices = torch.where(cur_input_ids == patch_token_id)[0]
-                    mask_index_start = masked_indices[0]
-                    if (masked_indices != torch.arange(mask_index_start, mask_index_start+query_token_number, device=masked_indices.device, dtype=masked_indices.dtype)).any():
-                        raise ValueError("The image patch tokens should be consecutive.")
-                    cur_input_embeds = torch.cat((cur_input_embeds[:mask_index_start], 
-                                                cur_features, 
-                                                cur_input_embeds[mask_index_start+query_token_number:]), dim=0)
-            
-            new_input_embeds.append(cur_input_embeds)
-            cur_idx += 1
-        inputs_embeds = torch.stack(new_input_embeds, dim=0)
+        _, modal_llm_dict = self.encode_modalities(samples)
+        inputs_embeds = self.build_inputs_embeds_from_prompt_ids(input_ids, modal_llm_dict)
 
         '''
         Notation：比如 ChatGLM 这种模型是不支持 inputs_embeds 输入的，所以无法采用这种方式去计算loss
@@ -757,6 +939,7 @@ class AffectGPT(Blip2Base):
         num_video_query_token = cfg.get("num_video_query_token", 'xxx') # 32
         num_multi_query_token = cfg.get("num_multi_query_token", 'xxx') # 16
         num_image_query_token = cfg.get("num_image_query_token", 'xxx') # 32
+        max_length = cfg.get("max_length", 1024)
 
         model = cls(
             visual_encoder_name=visual_encoder_name,
@@ -774,6 +957,7 @@ class AffectGPT(Blip2Base):
             num_audio_query_token=num_audio_query_token,
             num_multi_query_token=num_multi_query_token,
             num_image_query_token=num_image_query_token,
+            max_length=max_length,
             multi_fusion_type=multi_fusion_type,
             video_fusion_type=video_fusion_type,
             audio_fusion_type=audio_fusion_type,
@@ -802,7 +986,5 @@ class AffectGPT(Blip2Base):
             # ckpt = torch.load(ckpt_path_3, map_location="cpu")
             ckpt = torch.load(ckpt_path_3, map_location="cpu", weights_only=True)
             model.load_state_dict(ckpt['model'], strict=False)
-        
-        return model
 
-    
+        return model

@@ -1,0 +1,94 @@
+model:
+  arch: affectgpt
+  model_type: pretrain_vicuna
+
+  frozen_video_proj: False
+  frozen_video_Qformer: False
+  frozen_audio_Qformer: False
+  frozen_audio_proj: False
+  frozen_multi_Qformer: False
+  frozen_multi_llama_proj: False
+  frozen_llm: False
+
+  multi_fusion_type: attention
+  video_fusion_type: attention
+  audio_fusion_type: attention
+  image_fusion_type: mean
+
+  ckpt: ""
+  ckpt_2: ""
+
+  llama_model: "Qwen25"
+  acoustic_encoder: "HUBERT_LARGE"
+  visual_encoder: "CLIP_VIT_LARGE"
+
+  num_audio_query_token: 1
+  num_video_query_token: 1
+  num_multi_query_token: 1
+  num_image_query_token: 1
+
+  max_length: 1024
+
+  vis_processor:
+    train:
+      name: "alpro_video_train"
+      n_frms: 8
+      image_size: 224
+  text_processor:
+    train:
+      name: "blip_caption"
+  img_processor:
+    train:
+      name: "blip2_image_train"
+      image_size: 224
+
+datasets:
+  mer2025ov_grpo:
+    data_type: video
+    face_or_frame: "multiface_audio_face_text"
+    question_type: "ovlabel"
+
+run:
+  task: video_text_grpo
+  runner: runner_grpo
+  lr_sched: "linear_warmup_cosine_lr"
+  init_lr: 1e-6
+  min_lr: 1e-6
+  warmup_lr: 1e-7
+  weight_decay: 0.05
+  max_epoch: 1
+  iters_per_epoch: 10
+  warmup_steps: 10
+  batch_size_train: 1
+  batch_size_eval: 1
+  seed: 42
+  num_workers: 0
+  amp: False
+  resume_ckpt_path: null
+  evaluate: False
+  train_splits: ["train"]
+  device: "cpu"
+  world_size: 1
+  dist_url: "env://"
+  distributed: False
+
+inference:
+  gpu: 0
+
+grpo:
+  actor_ckpt: ""
+  ref_ckpt: ""
+  group_size: 2
+  max_new_tokens: 32
+  temperature: 0.8
+  top_p: 0.9
+  kl_coef: 0 #按照论文当中配置，KL散度排除计算
+  clip_range: 0.2
+  max_grad_norm: 1.0
+  advantage_eps: 1e-6
+
+rewards:
+  items:
+    - name: "debug_length_reward"
+      weight: 1.0
+      scale: 1.0

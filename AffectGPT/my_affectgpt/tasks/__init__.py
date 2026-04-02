@@ -8,6 +8,7 @@
 from my_affectgpt.common.registry import registry
 from my_affectgpt.tasks.base_task import BaseTask
 from my_affectgpt.tasks.video_text_pretrain import VideoTextPretrainTask
+from my_affectgpt.tasks.video_text_grpo import VideoTextGRPOTask
 
 def setup_task(cfg):
     assert "task" in cfg.run_cfg, "Task name must be provided."
@@ -18,5 +19,6 @@ def setup_task(cfg):
 
 __all__ = [
     "BaseTask",
-    "VideoTextPretrainTask"
+    "VideoTextPretrainTask",
+    "VideoTextGRPOTask",
 ]

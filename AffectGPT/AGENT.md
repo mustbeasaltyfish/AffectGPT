@@ -33,15 +33,26 @@ The current training entrypoint is `train.py`.
 The runtime path is:
 
 1. `train.py` parses `--cfg-path` and optional `--options`.
-2. `my_affectgpt.common.config.Config` loads the YAML and merges four sections: `run`, `model`, `datasets`, `inference`.
+2. `my_affectgpt.common.config.Config` loads the YAML and merges six sections: `run`, `model`, `datasets`, `inference`, `grpo`, `rewards`.
 3. `Config.build_runner_config()` also sets `run.output_dir` to `output/<config_basename>`.
 4. `train.py` creates `job_id` as `<config_basename>_<timestamp>` and calls `init_distributed_mode(cfg.run_cfg)`.
-5. `tasks.setup_task(cfg)` resolves `cfg.run.task` through the registry. In current configs this is `video_text_pretrain`.
+5. `tasks.setup_task(cfg)` resolves `cfg.run.task` through the registry. Current training tasks are `video_text_pretrain` and `video_text_grpo`.
 6. `task.build_datasets(cfg)` resolves each dataset name through the builder registry.
 7. `task.build_model(cfg)` resolves `cfg.model.arch`, which is currently `affectgpt`.
-8. `RunnerBase(...).train()` drives the full epoch loop and checkpoint saving.
+8. The configured runner drives the full epoch loop and checkpoint saving. Current runners are `runner_base` and `runner_grpo`.
 
 Important detail: the YAML can say `distributed: True`, but `init_distributed_mode()` turns it off unless `RANK/WORLD_SIZE/LOCAL_RANK` or SLURM env vars exist. Plain `python train.py ...` therefore runs in non-distributed mode.
+
+## Two Training Paths
+
+This repo now has two parallel training paths.
+
+- SFT path:
+  `train.py -> Config -> task=video_text_pretrain -> dataset builder -> AffectGPT.forward() -> RunnerBase.train()`
+- GRPO path:
+  `train.py -> Config -> task=video_text_grpo -> builder=mer2025ov_grpo -> AffectGPT.generate_group()/compute_response_logprobs() -> GRPORunner.train_epoch()`
+
+Keep them separate when editing. The GRPO code reuses `AffectGPT` as policy, but it does not go through the SFT `forward(samples)["loss"]` path.
 
 ## Current Main Training Config
 
@@ -67,6 +78,21 @@ There is also a frame-based single-video inference config:
 
 - `train_configs/mercaptionplus_outputhybird_bestsetup_bestfusion_frame_lz.yaml`
 
+There is now also a GRPO debug config:
+
+- `train_configs/mer2025ov_grpo_debug.yaml`
+
+That config currently means:
+
+- task: `video_text_grpo`
+- runner: `runner_grpo`
+- model arch: `affectgpt`
+- dataset: `mer2025ov_grpo`
+- question type: `ovlabel`
+- reward stack: `debug_length_reward`
+- clipped-ratio objective with `clip_range: 0.2`
+- `kl_coef: 0`, so the ref model path is disabled entirely
+
 ## How Datasets Are Built
 
 Dataset construction goes through:
@@ -74,11 +100,18 @@ Dataset construction goes through:
 - `my_affectgpt/tasks/base_task.py`
 - `my_affectgpt/datasets/builders/__init__.py`
 - `my_affectgpt/datasets/builders/image_text_pair_builder.py`
+- `my_affectgpt/datasets/builders/grpo_builder.py`
 
 For the default training config:
 
 - dataset key `mercaptionplus` maps to `MERCaptionPlus_Builder`
 - that builder instantiates `MERCaptionPlus_Dataset`
+
+For the GRPO config:
+
+- dataset key `mer2025ov_grpo` maps to `MER2025OVGRPOBuilder`
+- that builder instantiates `MER2025OV_GRPO_Dataset`
+- this is separate from the existing inference-oriented `MER2025OV_Dataset`
 
 `MERCaptionPlus_Dataset` reads:
 
@@ -90,6 +123,18 @@ For the default training config:
 - face features from `../dataset/mer2025-dataset/openface_face`
 
 Those paths are not discovered dynamically. They come from hard-coded maps in `config.py`.
+
+`MER2025OV_GRPO_Dataset` reads:
+
+- labeled OV supervision from `config.PATH_TO_LABEL['MER2025OV']`
+- subtitles from the same hard-coded subtitle sources used by `MER2025OV`
+- multimodal payloads from the same video/audio/face roots already used elsewhere
+
+Its purpose is different from SFT datasets:
+
+- it builds prompt-only RL samples
+- it returns `reward_meta` instead of teacher-forced targets
+- it is the dataset behind the GRPO rollout path
 
 ## What A Dataset Sample Looks Like
 
@@ -112,6 +157,14 @@ For `MERCaptionPlus`, the two supervision targets are:
 - `ovlabel`
 
 The prompt is always instruction-style text, and the target is appended with `###`.
+
+For GRPO datasets, the batch shape is different:
+
+- `prompt_texts`: list of prompt-only strings
+- `reward_metas`: structured reward metadata per sample
+- modality tensors such as `frames`, `faces`, `audios`, `images`
+- no `labels`
+- no teacher-forced target text
 
 ## Important Dataset Side Effects
 
@@ -167,6 +220,16 @@ Training behavior:
 - visual and acoustic backbones are frozen
 - trainable parts depend on config flags, but usually include LoRA, fusion modules, and projection layers
 
+`AffectGPT` now serves both SFT and GRPO. Besides `forward(samples)`, the key GRPO-facing methods are:
+
+- `encode_modalities(samples)`
+- `build_prompt_input_ids(prompt_texts, max_length)`
+- `build_inputs_embeds_from_prompt_ids(input_ids, modal_llm_dict)`
+- `generate_group(samples, generation_cfg, group_size)`
+- `compute_response_logprobs(samples, prompt_input_ids, response_token_ids)`
+
+Do not move multimodal placeholder replacement back into chat wrappers or dataset code. `AffectGPT` is now the single source of truth for prompt embedding injection.
+
 ## Forward Pass Summary
 
 `AffectGPT.forward(samples)` does this:
@@ -179,6 +242,16 @@ Training behavior:
 5. Return causal LM loss only.
 
 This is a pure next-token training objective. There is no separate classification head.
+
+For GRPO, the same model does this instead:
+
+1. Tokenize prompt-only text with `build_prompt_input_ids()`.
+2. Encode modalities with `encode_modalities()`.
+3. Inject modality embeddings into prompt token embeddings.
+4. Sample `group_size` responses with `generate_group()`.
+5. Re-score sampled responses with `compute_response_logprobs()`.
+
+`generate_group()` uses `return_dict_in_generate=True` and slices responses from `outputs.sequences` using `len(outputs.scores)`. This was added to reduce dependence on older HuggingFace generate output conventions.
 
 ## Runner Behavior
 
@@ -200,6 +273,54 @@ The train loop uses:
 - `linear_warmup_cosine_lr` by default
 - `iters_per_epoch` from YAML, not from dataset length
 - `IterLoader`, so the dataloader is effectively infinite inside each epoch
+
+GRPO training is driven by `my_affectgpt/runners/runner_grpo.py`.
+
+That runner does this per iteration:
+
+1. get a prompt-only RL batch
+2. call `task.rollout_step()` to sample grouped responses
+3. call the configured reward stack
+4. compute group-normalized advantages
+5. compute actor logprobs on sampled responses
+6. optionally compute ref logprobs
+7. compute clipped-ratio GRPO loss
+8. backward, gradient clip, optimizer step
+
+Important implementation detail:
+
+- if `grpo.kl_coef > 0`, `runner_grpo` lazily builds `self.ref_model`, moves it to device, and uses it for KL
+- if `grpo.kl_coef == 0`, the runner never touches `self.ref_model`, so no ref model is instantiated and no ref-model GPU memory is consumed
+
+This behavior is intentional and is currently the expected way to disable KL regularization for pure policy optimization runs.
+
+GRPO logging adds:
+
+- `reward`
+- `kl`
+- `ratio`
+- `response_len`
+
+Checkpoint format still follows `RunnerBase`: only trainable parameters plus optimizer/scaler/config metadata are saved.
+
+## Reward System
+
+Rewards are now registered through `my_affectgpt/common/registry.py`.
+
+Current components:
+
+- `my_affectgpt/rewards/base_reward.py`
+- `my_affectgpt/rewards/composite_reward.py`
+- `my_affectgpt/rewards/debug_reward.py`
+
+Current debug rewards:
+
+- `debug_constant_reward`
+- `debug_length_reward`
+
+`CompositeReward` is the orchestrator. It instantiates each reward from `rewards.items` in YAML, runs them in order, and returns the weighted sum plus a structured breakdown.
+
+If you are adding a real reward, align it to the `BaseReward.score(samples, responses, reward_metas)` interface instead of hard-coding reward logic inside the GRPO task.
 
 ## Validation And Testing During Training
 
@@ -237,10 +358,15 @@ If you are changing training behavior:
 - `train.py`
 - `train_configs/*.yaml`
 - `my_affectgpt/common/config.py`
+- `my_affectgpt/common/registry.py`
 - `my_affectgpt/tasks/base_task.py`
+- `my_affectgpt/tasks/video_text_grpo.py`
 - `my_affectgpt/runners/runner_base.py`
+- `my_affectgpt/runners/runner_grpo.py`
+- `my_affectgpt/rl/grpo_loss.py`
 - `my_affectgpt/models/affectgpt.py`
 - `my_affectgpt/datasets/datasets/base_dataset.py`
+- `my_affectgpt/datasets/datasets/base_grpo_dataset.py`
 
 If you are changing dataset logic:
 
@@ -263,5 +389,8 @@ If you are changing inference or evaluation:
 - Read this file second for the actual runtime graph.
 - Before changing paths, check `config.py`; many scripts depend on those maps.
 - Before changing training prompts or modality tokens, inspect both dataset prompt builders and `AffectGPT.forward()`.
+- Before changing GRPO logic, inspect `video_text_grpo.py`, `runner_grpo.py`, `grpo_loss.py`, and the GRPO config together. These pieces are tightly coupled.
+- If `kl_coef == 0`, do not accidentally reintroduce eager ref-model construction in the runner or task. That would silently waste GPU memory.
+- `BaseGRPODataset.collater()` is intentionally strict about inconsistent modality shapes. Do not change it back to silent dropping unless you also redesign modality padding.
 - Before changing checkpoint behavior, inspect both training save logic and inference load logic.
 - Be careful with dirty worktrees. This repo may already contain local edits in core files.

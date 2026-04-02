@@ -20,7 +20,16 @@ class Config:
         runner_config = self.build_runner_config(cfg_path, **user_config)
         dataset_config = self.build_dataset_config(cfg_path, **user_config)
         inference_config = self.build_inference_config(cfg_path, **user_config) # 新加一个 inference config 文件
-        self.config = OmegaConf.merge(runner_config, model_config, dataset_config, inference_config)
+        grpo_config = self.build_grpo_config(cfg_path, **user_config)
+        reward_config = self.build_reward_config(cfg_path, **user_config)
+        self.config = OmegaConf.merge(
+            runner_config,
+            model_config,
+            dataset_config,
+            inference_config,
+            grpo_config,
+            reward_config,
+        )
 
     def _build_opt_list(self, opts):
         opts_dot_list = self._convert_to_dot_list(opts)
@@ -82,7 +91,8 @@ class Config:
     def build_inference_config(cfg_path, **kwargs):
         config = OmegaConf.load(cfg_path)
         inference = config.get("inference", None)
-        assert inference is not None, "Missing inference configuration file."
+        if inference is None:
+            return OmegaConf.create()
 
         inference_config = OmegaConf.create()
         if "inference" in kwargs:
@@ -97,6 +107,48 @@ class Config:
                 {"inference": config["inference"]}
             )
         return inference_config
+
+    @staticmethod
+    def build_grpo_config(cfg_path, **kwargs):
+        config = OmegaConf.load(cfg_path)
+        grpo = config.get("grpo", None)
+        if grpo is None:
+            return OmegaConf.create()
+
+        grpo_config = OmegaConf.create()
+        if "grpo" in kwargs:
+            grpo_config = OmegaConf.merge(
+                grpo_config,
+                {"grpo": config["grpo"]},
+                {"grpo": kwargs["grpo"]},
+            )
+        else:
+            grpo_config = OmegaConf.merge(
+                grpo_config,
+                {"grpo": config["grpo"]},
+            )
+        return grpo_config
+
+    @staticmethod
+    def build_reward_config(cfg_path, **kwargs):
+        config = OmegaConf.load(cfg_path)
+        rewards = config.get("rewards", None)
+        if rewards is None:
+            return OmegaConf.create()
+
+        reward_config = OmegaConf.create()
+        if "rewards" in kwargs:
+            reward_config = OmegaConf.merge(
+                reward_config,
+                {"rewards": config["rewards"]},
+                {"rewards": kwargs["rewards"]},
+            )
+        else:
+            reward_config = OmegaConf.merge(
+                reward_config,
+                {"rewards": config["rewards"]},
+            )
+        return reward_config
 
     @staticmethod
     def build_dataset_config(cfg_path, **kwargs):
@@ -143,7 +195,15 @@ class Config:
     
     @property
     def inference_cfg(self):
-        return self.config.inference
+        return self.config.get("inference", OmegaConf.create())
+
+    @property
+    def grpo_cfg(self):
+        return self.config.get("grpo", OmegaConf.create())
+
+    @property
+    def rewards_cfg(self):
+        return self.config.get("rewards", OmegaConf.create())
 
     # print config infos
     def pretty_print(self):
@@ -163,6 +223,14 @@ class Config:
 
         logging.info(f"\n======  Model Attributes  ======")
         logging.info(self._convert_node_to_json(self.config.model))
+
+        if "grpo" in self.config:
+            logging.info(f"\n======  GRPO Attributes  ======")
+            logging.info(self._convert_node_to_json(self.config.grpo))
+
+        if "rewards" in self.config:
+            logging.info(f"\n======  Reward Attributes  ======")
+            logging.info(self._convert_node_to_json(self.config.rewards))
 
     # write into logging
     def _convert_node_to_json(self, node):

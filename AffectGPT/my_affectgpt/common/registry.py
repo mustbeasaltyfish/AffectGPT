@@ -12,6 +12,7 @@ class Registry:
         "task_name_mapping": {},
         "processor_name_mapping": {},
         "model_name_mapping": {},
+        "reward_name_mapping": {},  #新增：奖励函数注册
         "lr_scheduler_name_mapping": {},
         "runner_name_mapping": {},
         "visual_encoder_mapping": {},
@@ -107,6 +108,25 @@ class Registry:
                 )
             cls.mapping["model_name_mapping"][name] = model_cls
             return model_cls
+
+        return wrap
+
+    @classmethod
+    def register_reward(cls, name):
+        def wrap(reward_cls):
+            from my_affectgpt.rewards.base_reward import BaseReward
+
+            assert issubclass(
+                reward_cls, BaseReward
+            ), "All rewards must inherit BaseReward class"
+            if name in cls.mapping["reward_name_mapping"]:
+                raise KeyError(
+                    "Name '{}' already registered for {}.".format(
+                        name, cls.mapping["reward_name_mapping"][name]
+                    )
+                )
+            cls.mapping["reward_name_mapping"][name] = reward_cls
+            return reward_cls
 
         return wrap
 
@@ -288,6 +308,10 @@ class Registry:
     @classmethod
     def get_model_class(cls, name): # name = 'affectgpt'
         return cls.mapping["model_name_mapping"].get(name, None) # get是一种从map中读取数据的方式，更加不容易报错的方法
+
+    @classmethod
+    def get_reward_class(cls, name):
+        return cls.mapping["reward_name_mapping"].get(name, None)
 
     '''
     {'image_text_pretrain': <class 'affectgpt.tasks.image_text_pretrain.ImageTextPretrainTask'>, 

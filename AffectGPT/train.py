@@ -19,6 +19,7 @@ from my_affectgpt.models import *
 from my_affectgpt.runners import *
 from my_affectgpt.processors import *
 from my_affectgpt.datasets.builders import *
+from my_affectgpt.rewards import *
 
 def setup_seeds(config): 
     seed = config.run_cfg.seed + get_rank()

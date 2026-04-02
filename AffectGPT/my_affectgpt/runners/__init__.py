@@ -6,5 +6,6 @@
 """
 
 from my_affectgpt.runners.runner_base import RunnerBase
+from my_affectgpt.runners.runner_grpo import GRPORunner
 
-__all__ = ["RunnerBase"]
+__all__ = ["RunnerBase", "GRPORunner"]

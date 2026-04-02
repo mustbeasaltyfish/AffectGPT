@@ -1,0 +1,6 @@
+reference/
+AGENT.md
+.DS_Store
+__pycache__/
+*.py[cod]
+tmp/

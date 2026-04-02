@@ -11,6 +11,9 @@ from my_affectgpt.datasets.builders.image_text_pair_builder import (
     SIMSv2Builder,
     IEMOCAPFourBuilder,
 )
+from my_affectgpt.datasets.builders.grpo_builder import (
+    MER2025OVGRPOBuilder,
+)
 
 __all__ = [
     "MER2025OV_Builder",
@@ -23,5 +26,6 @@ __all__ = [
     "CMUMOSEIBuilder",
     "SIMSBuilder",
     "SIMSv2Builder",
-    "IEMOCAPFourBuilder"
+    "IEMOCAPFourBuilder",
+    "MER2025OVGRPOBuilder",
 ]
