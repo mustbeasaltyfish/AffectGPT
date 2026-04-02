@@ -72,6 +72,14 @@ class AccuracyReward(BaseReward):
             raise ValueError("Ground-truth openset labels are empty in reward_meta.")
         return gt_labels
 
+    def _unique_length(self, labels):
+        values = []
+        for label in labels:
+            label = str(label).strip().lower()
+            if label:
+                values.append(label)
+        return len(list(dict.fromkeys(values)))
+
     def score(self, samples, responses, reward_metas):
         group_sizes = [len(group) for group in responses]
         flat_responses = [response for group in responses for response in group]
@@ -120,11 +128,15 @@ class AccuracyReward(BaseReward):
         flat_precision = []
         flat_recall = []
         flat_f1 = []
+        flat_pred_lengths = []
+        flat_gt_lengths = []
         for pred_labels, gt_labels in zip(flat_pred_labels, flat_gt_labels):
             score_dict = compute_single_ew_scores(gt_labels, pred_labels)
             flat_f1.append(score_dict["f1"])
             flat_precision.append(score_dict["precision"])
             flat_recall.append(score_dict["recall"])
+            flat_pred_lengths.append(self._unique_length(pred_labels))
+            flat_gt_lengths.append(self._unique_length(gt_labels))
 
         reward_tensor = torch.tensor(
             self._reshape_like_groups(flat_f1, group_sizes), dtype=torch.float32
@@ -138,6 +150,8 @@ class AccuracyReward(BaseReward):
             "pred_openset_texts": self._reshape_like_groups(flat_pred_texts, group_sizes),
             "pred_openset_lists": self._reshape_like_groups(flat_pred_labels, group_sizes),
             "gt_openset_lists": self._reshape_like_groups(flat_gt_labels, group_sizes),
+            "pred_lengths": self._reshape_like_groups(flat_pred_lengths, group_sizes),
+            "gt_lengths": self._reshape_like_groups(flat_gt_lengths, group_sizes),
             "precision": self._reshape_like_groups(flat_precision, group_sizes),
             "recall": self._reshape_like_groups(flat_recall, group_sizes),
             "f1": self._reshape_like_groups(flat_f1, group_sizes),

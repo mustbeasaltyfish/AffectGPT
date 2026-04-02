@@ -89,7 +89,19 @@ grpo:
 
 rewards:
   items:
-    - name: "debug_length_reward"
+    - name: "penalized_reward"
       weight: 1.0
-      scale: 1.0
+      reward:
+        name: "accuracy_reward"
+        extractor_model: "Qwen25"
+        extractor_batch_size: 8
+        strict_answer_tag: true
+        zero_on_extract_failure: true
+        inter_print: false
+      penalty:
+        name: "openset_length_penalty"
+        penalty_type: "p3"
+        deduplicate: true
+    - name: "format_reward"
+      weight: 0.2
   

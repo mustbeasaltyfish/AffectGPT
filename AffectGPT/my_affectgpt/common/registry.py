@@ -13,6 +13,7 @@ class Registry:
         "processor_name_mapping": {},
         "model_name_mapping": {},
         "reward_name_mapping": {},  #新增：奖励函数注册
+        "penalty_name_mapping": {},
         "lr_scheduler_name_mapping": {},
         "runner_name_mapping": {},
         "visual_encoder_mapping": {},
@@ -127,6 +128,25 @@ class Registry:
                 )
             cls.mapping["reward_name_mapping"][name] = reward_cls
             return reward_cls
+
+        return wrap
+
+    @classmethod
+    def register_penalty(cls, name):
+        def wrap(penalty_cls):
+            from my_affectgpt.penalties.base_penalty import BasePenalty
+
+            assert issubclass(
+                penalty_cls, BasePenalty
+            ), "All penalties must inherit BasePenalty class"
+            if name in cls.mapping["penalty_name_mapping"]:
+                raise KeyError(
+                    "Name '{}' already registered for {}.".format(
+                        name, cls.mapping["penalty_name_mapping"][name]
+                    )
+                )
+            cls.mapping["penalty_name_mapping"][name] = penalty_cls
+            return penalty_cls
 
         return wrap
 
@@ -312,6 +332,10 @@ class Registry:
     @classmethod
     def get_reward_class(cls, name):
         return cls.mapping["reward_name_mapping"].get(name, None)
+
+    @classmethod
+    def get_penalty_class(cls, name):
+        return cls.mapping["penalty_name_mapping"].get(name, None)
 
     '''
     {'image_text_pretrain': <class 'affectgpt.tasks.image_text_pretrain.ImageTextPretrainTask'>, 
