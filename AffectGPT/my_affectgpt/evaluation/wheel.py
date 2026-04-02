@@ -467,8 +467,10 @@ def calculate_openset_overlap_rate(gt_root=None, gt_csv=None, name2gt=None,
 
 
 
-format_mapping = read_format2raws()          # level3 -> level2
-raw_mapping = read_candidate_synonym_merge() # level2 -> level1
+DEFAULT_FORMAT_MAPPING = read_format2raws()          # level3 -> level2
+DEFAULT_RAW_MAPPING = read_candidate_synonym_merge() # level2 -> level1
+format_mapping = DEFAULT_FORMAT_MAPPING
+raw_mapping = DEFAULT_RAW_MAPPING
 
 
 def _get_candidate_metrics(level="level1"):
@@ -498,9 +500,9 @@ def _normalize_openset_labels(labels):
 
 def _map_labels_for_metric(labels, metric, format_mapping=None, raw_mapping=None):
     if format_mapping is None:
-        format_mapping = globals()["format_mapping"]
+        format_mapping = DEFAULT_FORMAT_MAPPING
     if raw_mapping is None:
-        raw_mapping = globals()["raw_mapping"]
+        raw_mapping = DEFAULT_RAW_MAPPING
     if metric.startswith('case3'):
         _, wheelname, levelname = metric.split('_')
         wheel_map = func_get_wheel_cluster(wheelname, levelname)
@@ -511,9 +513,9 @@ def _map_labels_for_metric(labels, metric, format_mapping=None, raw_mapping=None
 
 def compute_single_ew_scores(gt_text_or_list, pred_text_or_list, level="level1", format_mapping=None, raw_mapping=None):
     if format_mapping is None:
-        format_mapping = globals()["format_mapping"]
+        format_mapping = DEFAULT_FORMAT_MAPPING
     if raw_mapping is None:
-        raw_mapping = globals()["raw_mapping"]
+        raw_mapping = DEFAULT_RAW_MAPPING
 
     gt_labels = _normalize_openset_labels(gt_text_or_list)
     pred_labels = _normalize_openset_labels(pred_text_or_list)

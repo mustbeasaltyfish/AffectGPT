@@ -158,60 +158,6 @@ def openset_to_sentiment_batchcalling(openset_npz=None, name2openset=None,
     else:
         return whole_names, whole_responses
 
-
-format_mapping = read_format2raws()          # level3 -> level2
-raw_mapping = read_candidate_synonym_merge() # level2 -> level1
-# 功能：input [gt, openset]; output: 12 个 EW-based metric 下的平均结果
-def wheel_metric_calculation(gt_root=None, gt_csv=None, name2gt=None, 
-                             openset_root=None, openset_npz=None, name2pred=None, 
-                             process_names=None, inter_print=True, level='level1'):
-
-    # 已 M-avg 为主指标
-    # candidate_metrics = [
-    #                     'case1', 'case2',
-    #                     'case3_wheel1_level1', 'case3_wheel1_level2',
-    #                     'case3_wheel2_level1', 'case3_wheel2_level2',
-    #                     'case3_wheel3_level1', 'case3_wheel3_level2',
-    #                     'case3_wheel4_level1', 'case3_wheel4_level2',
-    #                     'case3_wheel5_level1', 'case3_wheel5_level2',
-    #                     ]
-    if level == 'level1':
-        candidate_metrics = [
-                            'case3_wheel1_level1',
-                            'case3_wheel2_level1',
-                            'case3_wheel3_level1',
-                            'case3_wheel4_level1',
-                            'case3_wheel5_level1',
-                            ]
-    elif level == 'level2':
-        candidate_metrics = [
-                            'case3_wheel1_level2',
-                            'case3_wheel2_level2',
-                            'case3_wheel3_level2',
-                            'case3_wheel4_level2',
-                            'case3_wheel5_level2',
-                            ]
-
-    # 计算每个metric的这个值
-    whole_scores = []
-    for metric in candidate_metrics:
-        precision, recall = calculate_openset_overlap_rate(gt_root=gt_root,
-                                                           gt_csv=gt_csv,
-                                                           name2gt=name2gt,
-                                                           openset_root=openset_root, 
-                                                           openset_npz=openset_npz, 
-                                                           name2pred=name2pred,
-                                                           process_names=process_names, 
-                                                           metric=metric,
-                                                           format_mapping=format_mapping,
-                                                           raw_mapping=raw_mapping,
-                                                           inter_print=inter_print)
-        fscore = 2 * (precision * recall) / (precision + recall)
-        whole_scores.append([fscore, precision, recall])
-    avg_scores = (np.mean(whole_scores, axis=0)).tolist()
-    return avg_scores
-
-
 def hitrate_metric_calculation(name2gt=None, openset_root=None, openset_npz=None, name2pred=None, inter_print=True):
 
     # 已 M-avg 为主指标 [全部映射到 level1 的 label]

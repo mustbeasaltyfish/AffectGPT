@@ -1,3 +1,5 @@
+import logging
+
 import torch
 
 from my_affectgpt.common.registry import registry
@@ -56,6 +58,8 @@ class AccuracyReward(BaseReward):
         return answer_text if answer_text else None
 
     def _reshape_like_groups(self, flat_items, group_sizes):
+        if len(set(group_sizes)) > 1:
+            raise ValueError(f"AccuracyReward requires uniform group sizes, got {group_sizes}.")
         outputs = []
         cursor = 0
         for group_size in group_sizes:
@@ -67,10 +71,26 @@ class AccuracyReward(BaseReward):
         gt_labels = reward_meta.get("gt_openset_list")
         if gt_labels is None:
             gt_labels = string_to_list(reward_meta.get("gt_openset_text", ""))
-        gt_labels = [item.lower().strip() for item in string_to_list(gt_labels) if str(item).strip()]
+        gt_labels = [item.lower().strip() for item in gt_labels if str(item).strip()]
         if len(gt_labels) == 0:
             raise ValueError("Ground-truth openset labels are empty in reward_meta.")
         return gt_labels
+
+    def _should_reraise_extractor_error(self, error):
+        if isinstance(error, (MemoryError, OSError)):
+            return True
+        if isinstance(error, RuntimeError):
+            message = str(error).lower()
+            critical_patterns = [
+                "out of memory",
+                "cuda",
+                "cublas",
+                "cudnn",
+                "model weights",
+                "failed to initialize",
+            ]
+            return any(pattern in message for pattern in critical_patterns)
+        return False
 
     def _unique_length(self, labels):
         values = []
@@ -98,7 +118,15 @@ class AccuracyReward(BaseReward):
                     sampling_params=self._sampling_params,
                     batch_size=self.extractor_batch_size,
                 )
-            except Exception:
+            except Exception as error:
+                if self._should_reraise_extractor_error(error):
+                    raise
+                logging.warning(
+                    "AccuracyReward extractor failed for %d answers with %s: %s",
+                    len(valid_answer_texts),
+                    type(error).__name__,
+                    error,
+                )
                 if not self.zero_on_extract_failure:
                     raise
                 extracted_openset_texts = [""] * len(valid_answer_texts)

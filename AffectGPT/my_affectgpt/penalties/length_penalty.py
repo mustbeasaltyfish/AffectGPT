@@ -61,6 +61,9 @@ class OpenSetLengthPenalty(BasePenalty):
             return 1.0 / (pred_length - gt_length + 1.0)
         if self.penalty_type == "p2":
             return gt_length / pred_length
+        if gt_length <= 1:
+            # Keep P3's logarithmic shape while avoiding the degenerate log(1)=0 case.
+            return math.log(gt_length + 1.0) / math.log(pred_length + 1.0)
         return math.log(gt_length) / math.log(pred_length)
 
     def compute(self, samples, responses, reward_metas, reward_tensor, reward_info):
