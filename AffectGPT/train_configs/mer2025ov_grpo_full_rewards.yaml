@@ -45,7 +45,7 @@ model:
 datasets:
   mer2025ov_grpo:
     data_type: video
-    face_or_frame: "multiface_audio_face_text"
+    face_or_frame: "faceframe"
     question_type: "ovlabel"
 
 run:
@@ -82,7 +82,7 @@ grpo:
   max_new_tokens: 32
   temperature: 0.8
   top_p: 0.9
-  kl_coef: 0 #按照论文当中配置，KL散度排除计算
+  kl_coef: 0
   clip_range: 0.2
   max_grad_norm: 1.0
   advantage_eps: 1e-6
@@ -102,35 +102,29 @@ rewards:
         name: "openset_length_penalty"
         penalty_type: "p3"
         deduplicate: true
+
+    - name: "penalized_reward"
+      weight: 0.6
+      reward:
+        name: "dual_reward"
+        extractor_model: "Qwen25"
+        extractor_batch_size: 8
+        strict_think_tag: true
+        zero_on_extract_failure: true
+        inter_print: false
+      penalty:
+        name: "openset_length_penalty"
+        penalty_type: "p3"
+        deduplicate: true
+
+    - name: "alignment_reward"
+      weight: 0.4
+      extractor_model: "Qwen25"
+      extractor_batch_size: 8
+      strict_think_tag: true
+      strict_answer_tag: true
+      zero_on_extract_failure: true
+      inter_print: false
+
     - name: "format_reward"
       weight: 0.2
-
-  # Optional example: add a dual reward on top of the current stack.
-  # items:
-  #   - name: "penalized_reward"
-  #     weight: 0.2
-  #     reward:
-  #       name: "dual_reward"
-  #       extractor_model: "Qwen25"
-  #       extractor_batch_size: 8
-  #       strict_think_tag: true
-  #       zero_on_extract_failure: true
-  #       inter_print: false
-  #     penalty:
-  #       name: "openset_length_penalty"
-  #       penalty_type: "p3"
-  #       deduplicate: true
-  #
-  # Optional example: add a perception reward with a local Gemma judge.
-  #   - name: "perception_reward"
-  #     weight: 0.2
-  #     judge_model_id: "google/gemma-4-E4B-it"
-  #     judge_dtype: "bfloat16"
-  #     judge_device_map: "auto"
-  #     max_video_seconds: 60
-  #     max_audio_seconds: 30
-  #     video_fps: 1.0
-  #     strict_answer_tag: true
-  #     zero_on_judge_failure: true
-  #     batch_pair_requests: false
-  #     inter_print: false

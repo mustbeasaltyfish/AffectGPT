@@ -6,6 +6,7 @@ from my_affectgpt.rewards.debug_reward import DebugConstantReward, DebugLengthRe
 from my_affectgpt.rewards.dual_reward import DualReward
 from my_affectgpt.rewards.format_reward import FormatReward
 from my_affectgpt.rewards.penalized_reward import PenalizedReward
+from my_affectgpt.rewards.perception_reward import PerceptionReward
 
 __all__ = [
     "BaseReward",
@@ -16,5 +17,6 @@ __all__ = [
     "DebugLengthReward",
     "DualReward",
     "FormatReward",
+    "PerceptionReward",
     "PenalizedReward",
 ]
