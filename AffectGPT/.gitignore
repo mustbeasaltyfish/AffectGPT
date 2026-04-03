@@ -4,3 +4,4 @@ AGENT.md
 __pycache__/
 *.py[cod]
 tmp/
+reports/
