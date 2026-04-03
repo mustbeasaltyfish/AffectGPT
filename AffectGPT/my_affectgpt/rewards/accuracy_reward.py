@@ -61,6 +61,8 @@ class AccuracyReward(BaseReward):
         gt_labels = reward_meta.get("gt_openset_list")
         if gt_labels is None:
             gt_labels = string_to_list(reward_meta.get("gt_openset_text", ""))
+        elif isinstance(gt_labels, str):
+            gt_labels = string_to_list(gt_labels)
         gt_labels = [item.lower().strip() for item in gt_labels if str(item).strip()]
         if len(gt_labels) == 0:
             raise ValueError("Ground-truth openset labels are empty in reward_meta.")

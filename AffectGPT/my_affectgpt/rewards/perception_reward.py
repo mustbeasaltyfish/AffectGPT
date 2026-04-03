@@ -195,10 +195,10 @@ class PerceptionReward(BaseReward):
             valid_answer_mask = [answer_text is not None for answer_text in answer_texts]
 
             if group_size < 2:
-                reward_binary = [1.0] * group_size
+                reward_binary = [0.0] * group_size
                 bt_scores = [0.0] * group_size
                 rank_indices = list(range(group_size))
-                top_k = group_size
+                top_k = 0
                 pair_indices = []
                 pair_verdicts = []
                 pair_success_masks = []
@@ -207,12 +207,15 @@ class PerceptionReward(BaseReward):
                 try:
                     video_array, visual_source = self._prepare_video_array(samples, sample_idx)
                     audio_array = self._prepare_audio_array(samples, sample_idx)
-                except Exception:
+                except Exception as error:
                     if not self.zero_on_judge_failure:
                         raise
                     logging.warning(
-                        "PerceptionReward failed to prepare judge inputs for sample %s.",
+                        "PerceptionReward failed to prepare judge inputs for sample %s with %s: %s",
                         reward_meta.get("name", sample_idx),
+                        type(error).__name__,
+                        error,
+                        exc_info=True,
                     )
                     reward_binary = [0.0] * group_size
                     bt_scores = [0.0] * group_size
@@ -277,6 +280,7 @@ class PerceptionReward(BaseReward):
                                 reward_meta.get("name", sample_idx),
                                 type(error).__name__,
                                 error,
+                                exc_info=True,
                             )
                             judge_verdicts = [None] * len(judge_batch)
 

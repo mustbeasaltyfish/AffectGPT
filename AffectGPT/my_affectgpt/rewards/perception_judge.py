@@ -1,6 +1,5 @@
 import re
 
-import numpy as np
 import torch
 
 
@@ -154,14 +153,17 @@ class GemmaPerceptionJudge:
     def compare_pairs(self, pair_inputs, audio_sampling_rate=16000):
         verdicts = []
         for pair_input in pair_inputs:
-            verdicts.append(
-                self.compare_pair(
-                    video_array=pair_input["video_array"],
-                    audio_array=pair_input["audio_array"],
-                    subtitle=pair_input["subtitle"],
-                    answer_a=pair_input["answer_a"],
-                    answer_b=pair_input["answer_b"],
-                    audio_sampling_rate=audio_sampling_rate,
+            try:
+                verdicts.append(
+                    self.compare_pair(
+                        video_array=pair_input["video_array"],
+                        audio_array=pair_input["audio_array"],
+                        subtitle=pair_input["subtitle"],
+                        answer_a=pair_input["answer_a"],
+                        answer_b=pair_input["answer_b"],
+                        audio_sampling_rate=audio_sampling_rate,
+                    )
                 )
-            )
+            except ValueError:
+                verdicts.append(None)
         return verdicts
